@@ -3,13 +3,34 @@ from requests.packages.urllib3.exceptions import InsecureRequestWarning
 from .auth import EncryptionClient
 from .const import GENERIC_PAYLOAD, LOGIN_PAYLOAD, HEADERS, NEXT_DAY_TIMESTAMP, TODAY_TIMESTAMP,LOGIN_CHECK_PAYLOAD,WS_PAYLOAD,JWT_PAYLOAD,JWT_HEADERS
 from .conf import APP_SOURCE
-from .order import Order, bo_co_order, OrderType, OrderFor
+from .order import Order, bo_co_order, OrderType, OrderFor, Exchange
 from .logging import log_response
 import datetime
 from typing import Union
 import json
 import websocket
 import pandas as pd
+
+ticks = 0
+ticksone = 0
+md_sum =0
+position = 0
+b = 0
+s = 0
+trades = 0
+buyvalue = 0
+sellvalue = 0
+moneymined=0  
+high_md = 0
+tradeinstru = 0 
+tradetype = ""
+tick_sum = 0
+tick_average = 0
+n = 0
+targetreach = 0
+
+global trigger
+global actuator
 
 class FivePaisaClient:
 
@@ -294,22 +315,293 @@ class FivePaisaClient:
         self.payload["body"]["TriggerPriceForSL"] = order.stoploss_price
         return self.order_request("BM")
     
-    def Request_Feed(self,Method:str,Operation:str,req_list:list):
+    def Request_Feed(self,Method:str,Operation:str,req_list:list,ab:int):
+        global tradeinstru
         Method_dict={"mf":"MarketFeedV3","md":"MarketDepthService","oi":"GetScripInfoForFuture"}
         Operation_dict={"s":"Subscribe","u":"Unsubscribe"}
-        
         self.ws_payload['Method']=Method_dict[Method]
         self.ws_payload['Operation']=Operation_dict[Operation]
         self.ws_payload['ClientCode']=self.client_code
         self.ws_payload['MarketFeedData']=req_list
+        tradeinstru = req_list[0]
         return self.ws_payload
+
     def Streming_data(self,wsPayload : dict):
+        entrytrigger = int(input("Entry Trigger: "))
+        exittrigger = int(input("Exit Trigger: "))
+        entryactuator = float(input("Entry Actuation: "))
+        exitactuator = float(input("Exit Actuation: "))
+        realtrade = input("Trade (y/n) : ")
+        tickinterval = int(input("Tick Interval: "))
+        target = float(input("Target: "))
+        targettrigger = int(input("Target trigger: "))
+        lowdepth = int(input("Low depth protection: "))
+        lowdepthactuator = float(input("Low depth actuator: "))
+        if realtrade == "y":
+            tradequantity = int(input("Trade Quantity: "))
         self.web_url=f'wss://openfeed.5paisa.com/Feeds/api/chat?Value1={self.Jwt_token}|{self.client_code}'
         auth=self.Login_check()
-
-        def on_message(ws, message):
-            print(message)
         
+        def on_message(ws, message):
+           global position
+           global md_sum
+           global ticks
+           global ticksone
+           global b
+           global s
+           global position
+           global tradetype
+           global trades
+           global buyvalue 
+           global sellvalue
+           global moneymined 
+           global high_md
+           global tick_sum
+           global tick_average
+           global n
+           global targetreach
+           data1 = json.loads(message)
+           data2 = data1['Details']
+           data3 = data2[0]
+           ltp = data3['Price']
+           print('LTP:',ltp)
+           ticks = ticks + 1
+           ticksone = ticksone + 1
+           print("ticks:",ticks)
+           totalbuy = data1['TBidQ']
+           totalsell = data1['TOffQ']
+           if totalbuy > totalsell:
+             md_difference = totalbuy - totalsell
+           else:
+             md_difference = totalsell - totalbuy
+           print("Actual market depth gap: ",md_difference)
+           md_sum = md_sum + md_difference
+           average_md = md_sum/ticks
+           print("Average market depth gap: ",average_md)
+           if md_difference>average_md:
+               md_demand = ((average_md - md_difference)/average_md)
+           else:
+               md_demand = ((average_md - md_difference)/average_md)
+           print("Market depth gap:", md_demand)
+           if position == 0:
+             if totalbuy > totalsell :
+               domination = "buy"
+             else:
+               domination = "sell"
+           elif position == 1 and tradetype =="rt":
+               if md_difference < average_md :
+                 domination = "sell"
+               else:
+                 if totalbuy > totalsell :
+                   domination = "buy"
+                 else:
+                   domination = "sell"
+           elif position == -1 and tradetype == "rt" :
+               if md_difference < average_md :
+                 domination = "buy"
+               else:
+                 if totalbuy > totalsell :
+                   domination = "buy"
+                 else:
+                   domination = "sell"
+           else:
+             if totalbuy > totalsell :
+               domination = "buy"
+             else:
+               domination = "sell"
+           print("Domination:",domination)
+           if position == 0:
+               trigger = entrytrigger
+               if md_difference < lowdepth:
+                 actuator = lowdepthactuator
+               else:
+                 actuator = entryactuator
+               print("Actuation:",actuator)
+               print("Trigger: ",trigger)
+           else:
+               if (position ==1 and (ltp - buyvalue) > target) or (position == -1 and (sellvalue - ltp) > target):
+                   targetreach = 1
+               if targetreach == 1:
+                   trigger = targettrigger
+               else:
+                   trigger = exittrigger
+               print("Trigger: ",trigger)
+               if (position == -1 and tradetype == "rt") or (position == 1 and tradetype == "rt"):
+                if high_md < md_demand :
+                  high_md = md_demand
+                  if high_md - (0.5*high_md) > exitactuator:
+                    actuator = high_md - (0.5*high_md)
+                  else:
+                    actuator = exitactuator
+                else :
+                  if (high_md - (0.5*high_md)) > exitactuator:
+                    actuator = high_md - (0.5*high_md)
+                  else:
+                    actuator = exitactuator
+                print("Actuation:",actuator)
+               else:
+                 if (-1*high_md) > md_demand:
+                    high_md = (-1*md_demand)
+                    if high_md - (0.5*high_md) > exitactuator:
+                      actuator = high_md - (0.5*high_md)
+                    else:
+                      actuator = exitactuator
+                 else :
+                    if (high_md - (0.5*high_md)) > exitactuator:
+                      actuator = high_md - (0.5*high_md)
+                    else:
+                      actuator = exitactuator
+                 print("Actuation:",(-1*actuator))
+           if tickinterval > 0 and position == 0:
+             if md_demand > actuator and domination == "sell":
+                b = b+1
+                s = 0
+             elif md_demand < (-1 * actuator) and domination == "sell":
+                s = s+1
+                b = 0
+             elif md_demand > actuator and domination == "buy":
+                b = 0
+                s = s+1
+             elif md_demand < (-1 * actuator) and domination == "buy":
+                b = b+1
+                s = 0
+             else:
+                b = 0
+                s = 0
+           elif position == 1 and tickinterval == 0:
+             if tradetype == "rt":
+               if domination == "sell" and md_demand < actuator :
+                  s = s+1
+                  b = 0
+               elif domination == "buy" and md_demand < (1-entryactuator) : 
+                  s = s+1
+                  b =  0
+               else:
+                  s = 0
+                  b = 0
+             else:
+               if md_demand > (-1 * actuator) : 
+                  s = s+1
+                  b =  0
+               else:
+                  s = 0
+                  b = 0
+           elif position == -1 and tickinterval == 0 :
+             if tradetype == "rt":
+               if domination == "buy" and md_demand < actuator : 
+                  b = b+1
+                  s = 0
+               elif domination == "sell" and md_demand < (1-entryactuator) : 
+                  b = b+1
+                  s =  0
+               else:
+                  b = 0
+                  s = 0  
+             else:
+               if md_demand > (-1 * actuator) : 
+                  b = b+1
+                  s =  0
+               else:
+                  b = 0
+                  s = 0  
+           else:
+             if ticksone <= tickinterval:
+                 tick_sum = tick_sum + md_difference
+             else:
+                 tick_average = tick_sum/tickinterval
+                 tick_sum = 0
+                 ticksone = 0
+                 if tick_average >= average_md:
+                     if domination == "buy":
+                         b = b+1
+                         s = 0
+                     else:
+                         s = s+1
+                         b = 0
+                 if tick_average <= average_md:
+                     if domination == "sell":
+                         b = b+1
+                         s = 0
+                     else:
+                         s = s+1
+                         b = 0
+             if b > trigger or s > trigger:
+                     b = 0
+                     s = 0
+             print("Tick Average: ",tick_average)
+             print("Sub ticks: ",ticksone)
+           print("Buy trigger:",b)
+           print("Sell trigger:",s)
+           if b == trigger:
+              if position == 0:
+                 if realtrade == "y":
+                   test_order = Order(order_type='B',exchange=tradeinstru['Exch'],exchange_segment=tradeinstru['ExchType'], scrip_code=tradeinstru['ScripCode'],quantity=tradequantity,price=ltp,is_intraday=True,atmarket=True)
+                   self.place_order(test_order)
+                 if domination == "sell":
+                   tradetype = "rt"
+                 else:
+                   tradetype = "tt" 
+                 position = 1
+                 trades = trades+1
+                 buyvalue = ltp
+                 sellvalue = 0
+              elif position == -1:
+                 buyvalue = ltp
+                 if realtrade == "y":
+                   test_order = Order(order_type='B',exchange=tradeinstru['Exch'],exchange_segment=tradeinstru['ExchType'], scrip_code=tradeinstru['ScripCode'], quantity=tradequantity,price=ltp,is_intraday=True,atmarket=True)
+                   self.place_order(test_order)            
+                 moneymined = moneymined + (sellvalue - buyvalue)
+                 position = 0
+                 b = 0
+                 s = 0    
+                 md_sum = 0 
+                 ticks = 0
+                 high_md = 0
+                 tradetype = ""
+                 targetreach = 0
+              else:
+                 b = 0
+                 s = 0
+           if s == trigger:
+             if position == 0:
+                 if realtrade == "y":
+                   test_order = Order(order_type='s',exchange=tradeinstru['Exch'],exchange_segment=tradeinstru['ExchType'], scrip_code=tradeinstru['ScripCode'], quantity=tradequantity,price=ltp,is_intraday=True,atmarket=True)
+                   self.place_order(test_order)
+                 if domination == "buy":
+                   tradetype = "rt"
+                 else:
+                   tradetype = "tt"      
+                 position = -1
+                 trades = trades+1
+                 sellvalue = ltp
+                 buyvalue = 0
+             elif position == 1:
+                 sellvalue = ltp
+                 if realtrade == "y":
+                   test_order = Order(order_type='s',exchange=tradeinstru['Exch'],exchange_segment=tradeinstru['ExchType'], scrip_code=tradeinstru['ScripCode'], quantity=tradequantity,price=ltp,is_intraday=True,atmarket=True)
+                   self.place_order(test_order)   
+                 moneymined = moneymined + (sellvalue - buyvalue)
+                 position = 0
+                 b = 0
+                 s = 0
+                 md_sum = 0
+                 ticks = 0
+                 high_md = 0
+                 tradetype = ""
+                 targetreach = 0
+             else:
+                 b = 0
+                 s = 0
+           print("Buy Value:",buyvalue)
+           print("Sell Value :",sellvalue)
+           print("Trades:",trades)
+           print("Positions:",position)
+           print("Trade Type:",tradetype)
+           print("Money Mined:",moneymined)
+           #if ticks == 500 and position == 0:
+              # ticks = 0
+              # md_sum = 0
+           print("**************************************************")
         def on_error(ws, error):
             print(error)
             
